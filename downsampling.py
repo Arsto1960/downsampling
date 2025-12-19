@@ -3,165 +3,188 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt, square
 
-# --- Page Config ---
+# --- Page Config & CSS ---
 st.set_page_config(
     page_title="Downsampling & Aliasing",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS for Embedding ---
 st.markdown("""
     <style>
         .block-container {
             padding-top: 1rem;
-            padding-bottom: 0rem;
-            padding-left: 1rem;
-            padding-right: 1rem;
+            padding-bottom: 2rem;
+            padding-left: 2rem;
+            padding-right: 2rem;
         }
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
-        .stCheckbox { margin-top: 10px; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- Title & Intro ---
-st.markdown("### ⬇️ Downsampling & Aliasing")
+# --- Title ---
+st.markdown("### 📉 Downsampling & Aliasing")
 st.markdown(
-    "Why do we need to Low-Pass filter a signal before reducing its sampling rate? "
-    "Toggle the filter below to hear and see the difference."
+    "When reducing the sampling rate (downsampling), we must remove high frequencies first. "
+    "If we don't, they **alias** (fold back) and distort the signal."
 )
 
-# --- Parameters ---
-fs = 16000          # sampling frequency [Hz]
-f0 = 150            # square-wave fundamental [Hz]
-duty = 60           # duty cycle [%]
-duration = 0.5      # seconds
-
-# --- Controls ---
+# --- Controls (Compact) ---
 with st.container(border=True):
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
-        factor = st.slider("Downsampling Factor (×)", 1, 16, 4, step=1)
+        factor = st.slider("Downsampling Factor (M)", 1, 16, 4, step=1)
     with c2:
-        apply_filter = st.checkbox("Apply Anti-aliasing Filter (Pre-decimation)", value=True)
+        st.write("") # Spacer to align checkbox
+        st.write("") 
+        apply_filter = st.toggle("Apply Anti-aliasing Filter", value=True)
+    with c3:
+        st.info("💡 **Tip:** Listen to the audio. Without the filter, the pitch changes wrongly!", icon="👂")
 
-# --- Computation ---
+# --- Processing ---
+fs = 16000          # High enough to hear clear artifacts
+f0 = 150            # Fundamental freq
+duty = 60           # Duty cycle
+duration = 0.5      
+
 # 1. Generate Signal
 N = int(np.round(duration * fs))
 t = np.arange(N) / fs
 # Square wave (rich in harmonics)
 sig = square(2*np.pi*f0*t, duty=duty/100.0).astype(np.float64)
-sig = sig / np.max(np.abs(sig))  # normalize
 
-# 2. Filter Logic
-def butter_lowpass(cutoff_hz, fs, order=8):
-    return butter(order, cutoff_hz/(0.5*fs), btype="low", output="ba")
-
+# 2. Filter & Downsample Logic
 if factor < 1: factor = 1
-fs_ds = fs // factor # New sampling rate
+fs_ds = fs // factor
 
 if apply_filter and factor > 1:
+    # Cutoff just below the NEW Nyquist frequency (fs_ds / 2)
     ny_new = 0.5 * fs_ds
-    cutoff = 0.9 * ny_new  # cutoff just below new Nyquist
-    b, a = butter_lowpass(cutoff, fs, order=8)
+    cutoff = 0.9 * ny_new 
+    b, a = butter(8, cutoff/(0.5*fs), btype="low") # 8th order butterworth
     sig_proc = filtfilt(b, a, sig)
 else:
-    sig_proc = sig # No filter: High freqs will fold back (alias)
+    sig_proc = sig
 
-# 3. Downsample (Decimate)
+# Decimate (Downsample)
 sig_ds = sig_proc[::factor]
 
 # --- FFT Helper ---
-def db_spectrum(x, fs):
-    N_len = len(x)
-    if N_len < 4: return np.array([0]), np.array([-120])
-    win = np.hanning(N_len)
-    X = np.fft.rfft(x * win)
-    mag = (2.0 / N_len) * np.abs(X) / np.mean(win)
-    mag_db = 20 * np.log10(np.maximum(mag, 1e-12))
-    f_axis = np.fft.rfftfreq(N_len, 1.0/fs)
-    return f_axis, mag_db
+def get_spectrum(x, fs_local):
+    n = len(x)
+    win = np.hanning(n)
+    # FFT
+    mag = np.abs(np.fft.rfft(x * win))
+    freqs = np.fft.rfftfreq(n, 1/fs_local)
+    # Convert to dB
+    mag_db = 20 * np.log10(mag / np.max(mag) + 1e-12)
+    return freqs, mag_db
 
 # --- Plotting Setup ---
 plt.rcParams.update({'font.size': 8})
-def style_plot(fig, ax):
-    fig.patch.set_alpha(0)
-    ax.patch.set_alpha(0)
-    ax.grid(True, alpha=0.2, linestyle='--')
+col_plot1, col_plot2 = st.columns(2)
+
+# Helper for transparent plots
+def style_ax(ax):
+    ax.grid(True, alpha=0.2, ls="--")
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_color('gray')
-    ax.spines['bottom'].set_color('gray')
-    ax.tick_params(colors='gray')
-    ax.xaxis.label.set_color('gray')
-    ax.yaxis.label.set_color('gray')
-    ax.title.set_color('gray')
+    # Transparent background
+    ax.set_facecolor("none")
 
-# --- Plot 1: Time Domain ---
-fig1, ax1 = plt.subplots(figsize=(6, 3))
-show_time = min(N, int(0.02 * fs)) # 20ms zoom
-# Plot original or filtered background
-if apply_filter and factor > 1:
-    ax1.plot(t[:show_time], sig_proc[:show_time], color="#cccccc", label="Filtered Input", lw=1.5, alpha=0.7)
-else:
-    ax1.plot(t[:show_time], sig[:show_time], color="#cccccc", label="Original Input", lw=1.5, alpha=0.7)
-
-# Plot Downsampled points
-t_ds = np.arange(len(sig_ds)) / fs_ds
-points_to_show = int(show_time * fs_ds / fs)
-ax1.plot(t_ds[:points_to_show], sig_ds[:points_to_show], 
-         "o-", color="#ff4b4b", markersize=4, label=f"Downsampled (fs={fs_ds})", lw=1)
-
-ax1.set_title("Time Domain (20ms Zoom)")
-ax1.set_xlabel("Time [s]")
-ax1.legend(frameon=False, loc="upper right")
-style_plot(fig1, ax1)
-
-# --- Plot 2: Frequency Domain ---
-fig2, ax2 = plt.subplots(figsize=(6, 3))
-Nfft = min(1 << 14, N)
-f_o, db_o = db_spectrum(sig[:Nfft], fs) # Spectrum of pure original
-f_d, db_d = db_spectrum(sig_ds[:min(len(sig_ds), Nfft)], fs_ds) # Spectrum of result
-
-ax2.plot(f_o, db_o, color="#cccccc", label="Original", lw=1)
-ax2.plot(f_d, db_d, color="#ff4b4b", label="Downsampled", lw=1.2, alpha=0.9)
-ax2.set_xlim(0, fs/2) # Show up to original Nyquist to see the cutoff
-ax2.set_ylim(-80, 5)
-ax2.set_title("Frequency Spectrum")
-ax2.set_xlabel("Frequency [Hz]")
-ax2.set_ylabel("dB")
-ax2.legend(frameon=False, loc="upper right")
-style_plot(fig2, ax2)
-
-# --- Layout: Plots & Audio ---
-col_plots, col_audio = st.columns([2, 1])
-
-with col_plots:
-    c_p1, c_p2 = st.columns(2)
-    with c_p1: st.pyplot(fig1, use_container_width=True)
-    with c_p2: st.pyplot(fig2, use_container_width=True)
-
-with col_audio:
-    st.markdown("#### 🎧 Listen")
-    st.caption("Original (16 kHz)")
-    st.audio((sig * 0.9).astype(np.float32), sample_rate=int(fs))
+# PLOT 1: Time Domain (Zoomed)
+with col_plot1:
+    fig1, ax1 = plt.subplots(figsize=(6, 3))
+    fig1.patch.set_alpha(0) # Transparent figure
     
-    st.divider()
+    # Zoom window (20ms)
+    zoom_sec = 0.02
+    zoom_samples = int(zoom_sec * fs)
     
-    st.caption(f"Downsampled ({fs_ds} Hz)")
-    st.audio((sig_ds * 0.9).astype(np.float32), sample_rate=int(fs_ds))
+    # Plot Original
+    ax1.plot(t[:zoom_samples], sig[:zoom_samples], 
+             label="Original", color="#dddddd", lw=1.5, alpha=0.6)
+    
+    # Plot Filtered (if applicable)
+    if apply_filter and factor > 1:
+         ax1.plot(t[:zoom_samples], sig_proc[:zoom_samples], 
+                  label="Filtered (Pre)", color="#00a8cc", lw=1.5, alpha=0.8)
+    
+    # Plot Downsampled (Stem-like)
+    # We must scale the index for the downsampled array
+    zoom_samples_ds = int(zoom_sec * fs_ds)
+    t_ds = np.arange(zoom_samples_ds) / fs_ds
+    ax1.plot(t_ds, sig_ds[:zoom_samples_ds], 
+             'o', label=f"Downsampled (1/{factor})", color="#ff4b4b", markersize=4)
+    
+    style_ax(ax1)
+    ax1.legend(loc="upper right", frameon=False)
+    ax1.set_title("Time Domain (20ms zoom)", loc="left", color="gray")
+    ax1.set_xlabel("Time [s]")
+    st.pyplot(fig1, use_container_width=True)
 
-# --- Interpretation ---
-with st.expander("📚 Understanding Aliasing", expanded=True):
+# PLOT 2: Frequency Domain
+with col_plot2:
+    fig2, ax2 = plt.subplots(figsize=(6, 3))
+    fig2.patch.set_alpha(0)
+
+    # Get Spectra
+    f_orig, db_orig = get_spectrum(sig[:4096], fs)
+    f_ds, db_ds = get_spectrum(sig_ds[:4096], fs_ds)
+
+    ax2.plot(f_orig, db_orig, label="Original", color="#dddddd", lw=1, alpha=0.6)
+    ax2.plot(f_ds, db_ds, label="Downsampled", color="#ff4b4b", lw=1.2)
     
+    # Mark the New Nyquist Limit
+    ax2.axvline(fs_ds/2, color="#00a8cc", ls="--", lw=1)
+    ax2.text(fs_ds/2, 0, " New Nyquist", color="#00a8cc", fontsize=8, rotation=90, va='top')
+
+    style_ax(ax2)
+    ax2.set_xlim(0, 4000) # Limit view to relevant frequencies
+    ax2.set_ylim(-60, 5)
+    ax2.legend(loc="upper right", frameon=False)
+    ax2.set_title("Frequency Domain", loc="left", color="gray")
+    ax2.set_xlabel("Frequency [Hz]")
+    st.pyplot(fig2, use_container_width=True)
+
+# --- Audio Section ---
+st.divider()
+ac1, ac2, ac3 = st.columns([1, 1, 2])
+with ac1:
+    st.markdown("**Original (16kHz)**")
+    st.audio(sig, sample_rate=fs)
+with ac2:
+    st.markdown(f"**Downsampled ({fs_ds}Hz)**")
+    st.audio(sig_ds, sample_rate=fs_ds)
+with ac3:
+    # Interpretation
     st.markdown(f"""
-    **Current Settings:**
-    * Original Sampling Rate: **{fs} Hz** (Nyquist Limit: {fs/2:.0f} Hz)
-    * New Sampling Rate: **{fs_ds} Hz** (Nyquist Limit: {fs_ds/2:.0f} Hz)
+    <div style="font-size: 0.9em; color: gray; margin-top: -10px;">
+    <b>Observation:</b><br>
+    The square wave has harmonics at {f0*3}, {f0*5}, {f0*7} Hz...<br>
+    The new Sampling Rate is <b>{fs_ds} Hz</b> (Nyquist = {fs_ds/2} Hz).<br>
+    With filter <b>OFF</b>, harmonics above {fs_ds/2} Hz fold back (alias) and sound like "metallic" noise.
+    </div>
+    """, unsafe_allow_html=True)
 
+# --- Educational Expander ---
+with st.expander("📚 Understanding the Math"):
+    st.markdown("""
     **What is happening?**
-    1.  **With Filter OFF:** The square wave has harmonics extending well beyond {fs_ds/2:.0f} Hz. When you downsample, these high frequencies have nowhere to go, so they "fold back" (alias) into the lower frequencies. This creates distinct, metallic-sounding distortion.
-    2.  **With Filter ON:** We remove the frequencies above {fs_ds/2:.0f} Hz *before* throwing away samples. The signal looks "blurrier" in the time domain (rounded edges), but it is mathematically correct and sounds cleaner (no metallic artifacts).
+    
+    When we downsample by a factor of $M$ (decimation), the new sampling rate becomes $f_s / M$. 
+    Any frequency component in the original signal that is above the new Nyquist limit ($f_s / 2M$) cannot be represented correctly.
+    """)
+    
+    st.markdown("""
+    Instead of disappearing, these high frequencies "reflect" around the Nyquist frequency, appearing as lower frequencies (ghosts) in the new signal. This is **Aliasing**.
+    """)
+    
+    # 
+    
+    st.markdown("""
+    **The Solution:**
+    We apply a **Low-Pass Filter** (Anti-aliasing filter) to remove frequencies above $f_s / 2M$ *before* we throw away the samples. This ensures the remaining signal fits within the new bandwidth limits.
     """)
