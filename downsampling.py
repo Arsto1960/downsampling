@@ -3,8 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt, square
 
-st.title("⬇️ Downsampling")
-
+# st.title("⬇️ Downsampling")
+st.markdown("### ⬇️ Downsampling")
 # Intro
 st.markdown('''Why do we need to low-pass a discrete signal before downsampling it?
             Try it by yourself.
@@ -138,6 +138,7 @@ with st.expander("Open for comments"):
     """
 
     )
+
 
 
 
